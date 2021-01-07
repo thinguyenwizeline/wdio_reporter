@@ -1,0 +1,122 @@
+default_config: &default_config
+  docker:
+    - image: circleci/node:latest-browsers
+  working_directory: ~/fusion-project-template
+
+non-production_filters: &non-production_filters
+  branches:
+    only:
+      - /feat.*/
+      - /feature.*/
+      - /fix.*/
+      - /hotfix.*/
+      - /chore.*/
+      - /((ci).+|cd).*/
+      - /refactor*/
+      - /perf*/
+      - /build*/
+      - /test*/
+      - /style*/
+
+production_filters: &production_filters
+  branches:
+    only:
+      - master
+      - /release-.*/
+
+version: 2
+jobs:
+  build:
+    <<: *default_config
+    steps:
+      - checkout
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+      - run:
+          name: Generate the bundle zip
+          command: |
+            cd deploy
+            bash ./build-bundle.sh
+      - persist_to_workspace:
+          root: ./
+          paths:
+            - deploy
+      - store_artifacts:
+          path: ./deploy/bundle/
+
+  run_lint:
+    <<: *default_config
+    steps:
+      - checkout
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+      - run:
+          name: Install dependencies
+          command: |
+            npm install --no-save
+      - save_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+          paths:
+            - ./node_modules
+      - run:
+          name: Run ESLint
+          command: npm run lint
+
+  run_unit_test:
+    <<: *default_config
+    steps:
+      - checkout
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+      - run:
+          name: Run unit test with Jest
+          command: npm run test
+
+  deploy:
+    <<: *default_config
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Upload bundle
+          command: |
+            cd deploy
+            bash ./deploy-bundle.sh
+
+workflows:
+  version: 2
+  pre-commit-checks:
+    jobs:
+      - run_lint:
+          filters: *non-production_filters
+      - run_unit_test:
+          requires:
+            - run_lint
+          filters: *non-production_filters
+      - build:
+          requires:
+            - run_lint
+            - run_unit_test
+          filters: *non-production_filters
+      - deploy:
+          requires:
+            - build
+          filters: *non-production_filters
+
+  post-commit-checks:
+    jobs:
+      - run_lint:
+          filters: *production_filters
+      - run_unit_test:
+          requires:
+            - run_lint
+          filters: *production_filters
+      - build:
+          requires:
+            - run_lint
+            - run_unit_test
+          filters: *production_filters
+      - deploy:
+          requires:
+            - build
+          filters: *production_filters
